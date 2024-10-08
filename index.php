@@ -4,7 +4,7 @@
  * Plugin Name: KGR Posts with Galleries
  * Plugin URI: https://github.com/constracti/wp-posts-with-galleries
  * Description: Displays posts with galleries in a tools page list.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Requires at least: 6.5.0
  * Requires PHP: 8.1
  * Author: constracti
@@ -56,18 +56,17 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 		] );
 		$this->items = array_map( function( WP_Post $post ): array {
 			$regex = '/' . get_shortcode_regex( ['gallery'] ) . '/';
-			$gal = [];
+			$galleries = [];
 			preg_match_all( $regex, $post->post_content, $matches, PREG_SET_ORDER );
 			foreach ( $matches as $m ) {
 				$atts = shortcode_parse_atts( $m[3] );
 				$ids = isset( $atts['ids'] ) ? array_map( 'intval', explode( ',', $atts['ids'] ) ) : [];
-				$gal[] = count( $ids );
+				// TODO galleries with no ids field show all photos of uploaded to post
+				$galleries[] = $ids;
 			}
 			return [
 				'post' => $post,
-				'galleries' => count( $gal ),
-				'photos' => array_sum( $gal ),
-				'details' => implode( '+', $gal ),
+				'galleries' => $galleries,
 			];
 		}, $posts );
 	}
@@ -76,9 +75,10 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 		return [
 			'id' => esc_html__( 'ID', 'kgr-posts-with-galleries' ),
 			'title' => esc_html__( 'Title', 'kgr-posts-with-galleries' ),
+			'date' => esc_html__( 'Date', 'kgr-posts-with-galleries' ),
 			'galleries' => esc_html__( 'Galleries', 'kgr-posts-with-galleries' ),
 			'photos' => esc_html__( 'Photos', 'kgr-posts-with-galleries' ),
-			'details' => esc_html__( 'Details', 'kgr-posts-with-galleries' ),
+			'filesize' => esc_html__( 'Filesize', 'kgr-posts-with-galleries' ),
 		];
 	}
 
@@ -90,7 +90,12 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 
 	function column_id( array $item ): string {
 		$post = $item['post'];
-		return sprintf( '<a href="%s">%d</a>', admin_url(), $post->ID );
+		$href = admin_url( 'post.php' );
+		$href = add_query_arg( [
+			'post' => $post->ID,
+			'action' => 'edit',
+		], $href );
+		return sprintf( '<a href="%s">%d</a>', $href, $post->ID );
 	}
 
 	function column_title( array $item ): string {
@@ -98,8 +103,37 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 		return sprintf( '<a href="%s">%s</a>', post_permalink( $post ), $post->post_title );
 	}
 
-	function column_default( $item, $column_name ): string {
-		return strval( $item[$column_name] );
+	function column_date( array $item ): string {
+		$post = $item['post'];
+		return get_the_date( get_option( 'date_format' ), $post );
+	}
+
+	function column_galleries( array $item ): string {
+		return strval( count( $item['galleries'] ) );
+	}
+
+	function column_photos( array $item ): string {
+		return sprintf( '%d=%s',
+			array_sum( array_map( 'count', $item['galleries'] ) ),
+			implode( '+', array_map( 'count', $item['galleries'] ) ),
+		);
+	}
+
+	function column_filesize( array $item ): string {
+		// TODO include filesize of various attachment sizes
+		$filesize = 0;
+		foreach ( $item['galleries'] as $ids ) {
+			foreach ( $ids as $id ) {
+				$path = get_attached_file( $id );
+				if ( $path === FALSE )
+					continue;
+				$size = filesize( $path );
+				if ( $size === FALSE )
+					continue;
+				$filesize += $size;
+			}
+		}
+		return sprintf( '%.1f MiB', $filesize / (1024 * 1024) );
 	}
 }
 
@@ -120,12 +154,16 @@ add_action( 'admin_menu', function() {
 ?>
 <style>
 .column-id,
+.column-date,
 .column-galleries,
-.column-photos {
+.column-filesize {
 	width: 100px;
 }
-.column-details {
+.column-photos {
 	width: 200px;
+}
+.column-filesize {
+	text-align: right;
 }
 </style>
 <?php
