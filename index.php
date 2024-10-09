@@ -4,7 +4,7 @@
  * Plugin Name: KGR Posts with Galleries
  * Plugin URI: https://github.com/constracti/wp-posts-with-galleries
  * Description: Displays posts with galleries in a tools page list.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Requires at least: 6.5.0
  * Requires PHP: 8.1
  * Author: constracti
@@ -60,8 +60,13 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 			preg_match_all( $regex, $post->post_content, $matches, PREG_SET_ORDER );
 			foreach ( $matches as $m ) {
 				$atts = shortcode_parse_atts( $m[3] );
-				$ids = isset( $atts['ids'] ) ? array_map( 'intval', explode( ',', $atts['ids'] ) ) : [];
-				// TODO galleries with no ids field show all photos of uploaded to post
+				$ids = isset( $atts['ids'] ) ? array_map( 'intval', explode( ',', $atts['ids'] ) ) : get_posts( [
+					'post_type' => 'attachment',
+					'post_mime_type' => 'image',
+					'post_parent' => $post->ID,
+					'nopaging' => TRUE,
+					'fields' => 'ids',
+				] ) ;
 				$galleries[] = $ids;
 			}
 			return [
@@ -120,20 +125,60 @@ class KGR_Posts_With_Galleries extends WP_List_Table {
 	}
 
 	function column_filesize( array $item ): string {
-		// TODO include filesize of various attachment sizes
+		$upload = wp_get_upload_dir()['basedir'] . '/';
 		$filesize = 0;
 		foreach ( $item['galleries'] as $ids ) {
 			foreach ( $ids as $id ) {
-				$path = get_attached_file( $id );
-				if ( $path === FALSE )
-					continue;
-				$size = filesize( $path );
-				if ( $size === FALSE )
-					continue;
-				$filesize += $size;
+				$meta = wp_get_attachment_metadata( $id );
+				//var_dump( $meta );
+				$sizes = [];
+				$errors = [];
+				$paths['main'] = $meta['file']; // includes subdir; size via $meta['filesize']
+				$subdir = dirname( $meta['file'] ) . '/';
+				if ( isset( $meta['filesize'] ) && ( $fs = $meta['filesize'] ) !== 0 ) {
+					$sizes['main'] = $fs;
+					$filesize += $fs;
+				} else {
+					//$errors[] = 'main: size not found';
+					if ( ( $fs = filesize( $upload . $meta['file'] ) ) !== FALSE ) {
+						$sizes['main'] = $fs;
+						$filesize += $fs;
+					} else {
+						$errors[] = 'main: file not found';
+					}
+				}
+				if ( isset( $meta['original_image'] ) ) {
+					$paths['original'] = $meta['original_image']; // does not include subdir; size via filesize()
+					if ( ( $fs = filesize( $upload . $subdir . $meta['original_image'] ) ) !== FALSE )
+						$sizes['original'] = $fs;
+					else
+						$errors[] = 'original: file not found';
+				}
+				foreach ( $meta['sizes'] as $size => $meta ) {
+					$paths[$size] = $meta['file']; // does not include subdir; size via $meta['filesize']
+					if ( isset( $meta['filesize'] ) && ( $fs = $meta['filesize'] ) !== 0 ) {
+						$sizes[$size] = $fs;
+						$filesize += $fs;
+					} else {
+						//$errors[] = $size . ': size not found';
+						if ( ( $fs = filesize( $upload . $subdir . $meta['file'] ) ) !== FALSE ) {
+							$sizes[$size] = $fs;
+							$filesize += $fs;
+						} else {
+							$errors[] = $size . ': file not found';
+						}
+					}
+				}
+				if ( !empty( $errors ) ) {
+					echo '<pre>' . "\n";
+					print_r( $paths );
+					print_r( $sizes );
+					print_r( $errors );
+					echo '</pre>' . "\n";
+				}
 			}
 		}
-		return sprintf( '%.1f MiB', $filesize / (1024 * 1024) );
+		return sprintf( '%.1f MB', $filesize / (1024 * 1024) );
 	}
 }
 
@@ -146,6 +191,11 @@ add_action( 'admin_menu', function() {
 		echo '<div class="wrap">' . "\n";
 		echo sprintf( '<h1>%s</h1>', $title ) . "\n";
 		echo '<form>' . "\n";
+		echo sprintf( '<input type="hidden" name="page" value="%s">', $slug ) . "\n";
+		if ( isset( $_GET['orderby'] ) )
+			echo sprintf( '<input type="hidden" name="orderby" value="%s">', $_GET['orderby'] ) . "\n";
+		if ( isset( $_GET['order'] ) )
+			echo sprintf( '<input type="hidden" name="order" value="%s">', $_GET['order'] ) . "\n";
 		$table = new KGR_Posts_With_Galleries();
 		$table->prepare_items();
 		$table->display();
